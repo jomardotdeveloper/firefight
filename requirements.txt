@@ -1,3 +1,6 @@
 opencv-python
 numpy
 pyserial
+flask
+opencv-contrib-python
+imutils
