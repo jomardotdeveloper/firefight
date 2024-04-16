@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<title>Firefighter</title>
+<style>
+    h2 {
+        padding-bottom: 20px;
+        font-weight: 600;
+        font-size: 3.2em
+    }
+</style>
+
+<body>
+    <div class="container">
+        <center>
+            <h2>Firefighter</h2>
+            <p>Connection status: <span id="connection">Not Yet Connected</span></p>
+            <p>I see: <span id="eye"></span></p>
+        </center>
+        <img src="{{ url_for('video_feed') }}" width="100%">
+    </div>
+
+    <script src="/dist/socket.io.js"
+        integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
+        crossorigin="anonymous"></script>
+    <script>
+        const socket = io();
+        socket.on("connect", function () {
+            document.querySelector("#connection").textContent = "Connected";
+        });
+
+        socket.on("message", function (data) {
+            document.querySelector("#eye").textContent = data;
+        });
+
+    </script>
+</body>
+
+</html>

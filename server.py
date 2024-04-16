@@ -1,8 +1,15 @@
 from flask import Flask, render_template, Response
+from flask_socketio import SocketIO, send
 import cv2
 import torch
 
-app = Flask(__name__)
+app = Flask(__name__,
+            static_url_path="",
+            static_folder="web/static",
+            template_folder="web/templates")
+app.config['SECRET_KEY'] = 'firefighter'
+socketio = SocketIO(app)
+
 
 object_model = torch.hub.load("ultralytics/yolov5", "yolov5s")
 fire_model = torch.hub.load("yolov5", "custom", source="local", path="models/fire_best.pt")
@@ -57,22 +64,32 @@ def capture_frames():
             fire_df = xyxy[xyxy["name"] == "fire"]
             if fire_df.empty:
                 continue
-            x, y, w, h = get_bounding_box(fire_df["xmin"], fire_df["ymin"], fire_df["xmax"], fire_df["ymax"])
-            cv2.rectangle(frame, (x, y), (x+w, y+h), FIRE_COLOR, 2)
-            section = get_rect_horizontal_section(frame, x, w)
-            area = get_rect_area(w, h)
-            print("FIRE_{section}_{area}".format(section=section, area=area))
 
-        object_results = object_model(frame, size=640)
-        for xyxy in object_results.pandas().xyxy:
-            # fire_df = xyxy[xyxy["name"] == "fire"]
-            # if fire_df.empty:
-            #     continue
-            x, y, w, h = get_bounding_box(xyxy["xmin"], xyxy["ymin"], xyxy["xmax"], xyxy["ymax"])
-            cv2.rectangle(frame, (x, y), (x+w, y+h), OBJECT_COLOR, 2)
-            section = get_rect_horizontal_section(frame, x, w)
-            area = get_rect_area(w, h)
-            print("OBJECT_{section}_{area}".format(section=section, area=area))
+            try:
+                x, y, w, h = get_bounding_box(fire_df["xmin"], fire_df["ymin"], fire_df["xmax"], fire_df["ymax"])
+                cv2.rectangle(frame, (x, y), (x+w, y+h), FIRE_COLOR, 2)
+                section = get_rect_horizontal_section(frame, x, w)
+                area = get_rect_area(w, h)
+
+                fire_message = "FIRE_{section}_{area}".format(section=section, area=area)
+                socketio.send(fire_message)
+                print(fire_message)
+            except:
+                continue
+
+        # object_results = object_model(frame, size=640)
+        # for xyxy in object_results.pandas().xyxy:
+        #     try:
+        #         x, y, w, h = get_bounding_box(xyxy["xmin"], xyxy["ymin"], xyxy["xmax"], xyxy["ymax"])
+        #         cv2.rectangle(frame, (x, y), (x+w, y+h), OBJECT_COLOR, 2)
+        #         section = get_rect_horizontal_section(frame, x, w)
+        #         area = get_rect_area(w, h)
+
+        #         object_message = "OBJECT_{section}_{area}".format(section=section, area=area)
+        #         socketio.send(object_message)
+        #         print(object_message)
+        #     except:
+        #         continue
 
         ret, buffer = cv2.imencode('.jpg', frame)
         frame = buffer.tobytes()
@@ -91,4 +108,4 @@ def video_feed():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, host="0.0.0.0", port=8001)
