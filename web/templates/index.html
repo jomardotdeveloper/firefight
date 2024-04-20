@@ -16,6 +16,7 @@
             <p>Connection status: <span id="connection">Not Yet Connected</span></p>
             <p>Fire: <span id="fire"></span></p>
             <p>Following: <span id="follow"></span></p>
+            <p>Movement: <span id="movement"></span></p>
         </center>
         <img src="{{ url_for('video_feed') }}" width="100%">
     </div>
@@ -35,6 +36,10 @@
 
         socket.on("vest", function (data) {
             document.querySelector("#follow").textContent = JSON.stringify(data);
+        });
+
+        socket.on("movement", function () {
+            document.querySelector("#movement").textContent = JSON.stringify(data);
         });
     </script>
 </body>

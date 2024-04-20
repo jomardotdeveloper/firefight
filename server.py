@@ -50,7 +50,7 @@ lower_purple = np.array([120, 50, 100], dtype=np.uint8)
 upper_purple = np.array([150, 255, 255], dtype=np.uint8)
 min_vest_area = 1000
 
-fire_cascade = cv2.CascadeClassifier("fire_cascade_model_3.xml")
+fire_cascade = cv2.CascadeClassifier("fire_mushiq.xml")
 
 
 def capture_frames():
@@ -71,9 +71,6 @@ def capture_frames():
         cv2.line(frame, (3 * section_width, 0), (3 * section_width, height),
                  (0, 0, 255), 2)  # Red line for right section boundary
 
-        if not success:
-            continue
-
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         vest_mask = cv2.inRange(hsv, lower_purple, upper_purple)
@@ -81,6 +78,7 @@ def capture_frames():
                                      cv2.CHAIN_APPROX_SIMPLE)[-2]
         vest_cnts = sorted(vest_cnts, key=cv2.contourArea, reverse=True)
 
+        valid_follow_data = None
         if vest_cnts:
             largest_cnt = vest_cnts[0]
             x, y, w, h = cv2.boundingRect(largest_cnt)
@@ -92,48 +90,64 @@ def capture_frames():
                 data = {
                     "area": area,
                     "x": x, "y": y,
-                    "w": w, "h": h
+                    "w": w, "h": h,
+                    "section": section,
                 }
-                # socketio.emit("vest", data)
-                # print("Vest: {}".format(data))
-
-                if section == "middle":
-                    ser.write(bytes(b"forward"))
-                    socketio.emit("vest", "forward")
-                elif section == "left":
-                    ser.write(bytes(b"left"))
-                    socketio.emit("vest", "left")
-                elif section == "right":
-                    ser.write(bytes(b"right"))
-                    socketio.emit("vest", "right")
+                socketio.emit("vest", data)
+                print("Vest: {}".format(data))
+                valid_follow_data = data
         else:
             socketio.emit("vest", "No vest in sight")
 
-        # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # fires = fire_cascade.detectMultiScale(frame, 12, 5)
-        # if fires is not None:
-        #     fires = sorted(fires, key=lambda x: x[2] * x[3], reverse=True)
+        fires = fire_cascade.detectMultiScale(frame, 1.2, 5)
+        if fires is not None:
+            fires = sorted(fires, key=lambda x: x[2] * x[3], reverse=True)
 
-        # if fires:
-        #     x, y, w, h = fires[0]
-        #     x = int(x)
-        #     y = int(y)
-        #     w = int(w)
-        #     h = int(h)
-        #     cv2.rectangle(frame, (x, y), (x + w, y + h), FIRE_COLOR, 2)
-        #     area = w * h
-        #     data = {
-        #         "area": area,
-        #         "x": x, "y": y,
-        #         "w": w, "h": h
-        #     }
-        #     socketio.emit("fire", data)
-        #     print("Fire: {}".format(data))
-        # else:
-        #     socketio.emit("fire", "No fire in sight")
+        valid_fire_data = None
+        if fires:
+            x, y, w, h = fires[0]
+            x = int(x)
+            y = int(y)
+            w = int(w)
+            h = int(h)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), FIRE_COLOR, 2)
+            area = w * h
+            section = get_rect_horizontal_section(width, x, w)
+            data = {
+                "area": area,
+                "x": x, "y": y,
+                "w": w, "h": h,
+                "section": section,
+            }
+            socketio.emit("fire", data)
+            print("Fire: {}".format(data))
+            valid_fire_data = data
+        else:
+            socketio.emit("fire", "No fire in sight")
+
+        if valid_fire_data or valid_follow_data:
+            if valid_fire_data:
+                data_use = valid_fire_data
+            else:
+                data_use = valid_follow_data
+
+            section = data_use["section"]
+            if section == "middle":
+                ser.write(bytes(b"forward"))
+                socketio.emit("movement", "forward")
+            elif section == "left":
+                ser.write(bytes(b"left"))
+                socketio.emit("movement", "left")
+            elif section == "right":
+                ser.write(bytes(b"right"))
+                socketio.emit("movement", "right")
 
         ret, buffer = cv2.imencode(".jpg", frame)
         frame = buffer.tobytes()
+
+        valid_fire_data = None
+        valid_follow_data = None
+
         yield (b"--frame\r\n"
                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
 
