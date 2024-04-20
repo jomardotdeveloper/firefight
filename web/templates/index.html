@@ -14,7 +14,8 @@
         <center>
             <h2>Firefighter</h2>
             <p>Connection status: <span id="connection">Not Yet Connected</span></p>
-            <p>I see: <span id="eye"></span></p>
+            <p>Fire: <span id="fire"></span></p>
+            <p>Following: <span id="follow"></span></p>
         </center>
         <img src="{{ url_for('video_feed') }}" width="100%">
     </div>
@@ -28,10 +29,13 @@
             document.querySelector("#connection").textContent = "Connected";
         });
 
-        socket.on("message", function (data) {
-            document.querySelector("#eye").textContent = data;
-        });
+        socket.on("fire", function (data) {
+            document.querySelector("#fire").textContent = JSON.stringify(data);
+        })
 
+        socket.on("vest", function (data) {
+            document.querySelector("#follow").textContent = JSON.stringify(data);
+        });
     </script>
 </body>
 
