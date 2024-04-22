@@ -3,6 +3,9 @@ from flask_socketio import SocketIO
 import cv2
 import numpy as np
 import serial
+import threading
+
+camera_running = True
 
 app = Flask(__name__,
             static_url_path="",
@@ -11,11 +14,12 @@ app = Flask(__name__,
 app.config["SECRET_KEY"] = "firefighter"
 socketio = SocketIO(app)
 
-ser = serial.Serial("/dev/cu.usbserial-120", 9600, timeout=10)
+# ser = serial.Serial("/dev/cu.usbserial-120", 9600, timeout=10)
 
 
 FIRE_COLOR = (0, 0, 255)
 VEST_COLOR = (137, 87, 163)
+HOUSE_COLOR = (56, 57, 83)
 
 
 def get_rect_horizontal_section(frame_width, x, w):
@@ -49,16 +53,19 @@ def get_bounding_box(xmin, ymin, xmax, ymax):
 lower_purple = np.array([120, 50, 100], dtype=np.uint8)
 upper_purple = np.array([150, 255, 255], dtype=np.uint8)
 min_vest_area = 1000
+max_area = 10000
+
+lower_maroon = np.array([170, 151, 140], dtype=np.uint8)
+upper_maroon = np.array([83, 57, 56], dtype=np.uint8)
 
 fire_cascade = cv2.CascadeClassifier("fire_mushiq.xml")
 
 
 def capture_frames():
-    global camera
     camera = cv2.VideoCapture(0)
 
-    while True:
-        success, frame = camera.read()  # read the camera frame
+    while camera_running:
+        ret, frame = camera.read()
         frame = cv2.resize(frame, (640, 480))
         width, height, _ = frame.shape
 
@@ -69,9 +76,34 @@ def capture_frames():
         cv2.line(frame, (section_width, 0), (section_width, height),
                  (0, 255, 0), 2)  # Green line for left section boundary
         cv2.line(frame, (3 * section_width, 0), (3 * section_width, height),
-                 (0, 0, 255), 2)  # Red line for right section boundary
+                 (0, 255, 0), 2)  # Red line for right section boundary
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        house_mask = cv2.inRange(hsv, lower_maroon, upper_maroon)
+        house_cnts = cv2.findContours(house_mask.copy(), cv2.RETR_EXTERNAL,
+                                      cv2.CHAIN_APPROX_SIMPLE)[-2]
+        house_cnts = sorted(house_cnts, key=cv2.contourArea, reverse=True)
+        valid_house_data = None
+        if house_cnts:
+            largest_cnt = house_cnts[0]
+            x, y, w, h = cv2.boundingRect(largest_cnt)
+            area = cv2.contourArea(largest_cnt)
+            section = get_rect_horizontal_section(width, x, w)
+
+            if area >= min_vest_area:
+                cv2.rectangle(frame, (x, y), (x + w, y + h), HOUSE_COLOR, 2)
+                data = {
+                    "area": area,
+                    "x": x, "y": y,
+                    "w": w, "h": h,
+                    "section": section,
+                }
+                socketio.emit("house", data)
+                print("House: {}".format(data))
+                valid_house_data = data
+        else:
+            socketio.emit("House", "No house in sight")
 
         vest_mask = cv2.inRange(hsv, lower_purple, upper_purple)
         vest_cnts = cv2.findContours(vest_mask.copy(), cv2.RETR_EXTERNAL,
@@ -85,7 +117,7 @@ def capture_frames():
             area = cv2.contourArea(largest_cnt)
             section = get_rect_horizontal_section(width, x, w)
 
-            if area >= min_vest_area:
+            if area >= min_vest_area and area <= max_area:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), VEST_COLOR, 2)
                 data = {
                     "area": area,
@@ -133,23 +165,23 @@ def capture_frames():
 
             section = data_use["section"]
             if section == "middle":
-                ser.write(bytes(b"forward"))
+                # ser.write(bytes(b"forward"))
                 socketio.emit("movement", "forward")
             elif section == "left":
-                ser.write(bytes(b"left"))
+                # ser.write(bytes(b"left"))
                 socketio.emit("movement", "left")
             elif section == "right":
-                ser.write(bytes(b"right"))
+                # ser.write(bytes(b"right"))
                 socketio.emit("movement", "right")
 
         ret, buffer = cv2.imencode(".jpg", frame)
-        frame = buffer.tobytes()
 
         valid_fire_data = None
         valid_follow_data = None
 
-        yield (b"--frame\r\n"
-               b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+        socketio.emit("frame", buffer.tobytes())
+
+    camera.release()
 
 
 @app.route("/")
@@ -157,10 +189,9 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/video-feed")
-def video_feed():
-    return Response(capture_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-
 if __name__ == "__main__":
+    capture_thread = threading.Thread(target=capture_frames)
+    capture_thread.start()
     socketio.run(app, host="0.0.0.0", port=8001)
+    camera_running = False
+    capture_thread.join()

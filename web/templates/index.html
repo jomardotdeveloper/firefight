@@ -13,18 +13,20 @@
     <div class="container">
         <center>
             <h2>Firefighter</h2>
-            <p>Connection status: <span id="connection">Not Yet Connected</span></p>
+            <p>Connection status: <span id="connection">Not Connected</span></p>
             <p>Fire: <span id="fire"></span></p>
             <p>Following: <span id="follow"></span></p>
             <p>Movement: <span id="movement"></span></p>
         </center>
-        <img src="{{ url_for('video_feed') }}" width="100%">
+        <img id="frame" width="100%">
     </div>
 
     <script src="/dist/socket.io.js"
         integrity="sha512-q/dWJ3kcmjBLU4Qc47E4A9kTB4m3wuTY7vkFJDTZKjTs8jhyGQnaUrxa0Ytd0ssMZhbNua9hE+E7Qv1j+DyZwA=="
         crossorigin="anonymous"></script>
     <script>
+        const urlCreator = window.URL || window.webkitURL;
+
         const socket = io();
         socket.on("connect", function () {
             document.querySelector("#connection").textContent = "Connected";
@@ -38,9 +40,15 @@
             document.querySelector("#follow").textContent = JSON.stringify(data);
         });
 
-        socket.on("movement", function () {
+        socket.on("movement", function (data) {
             document.querySelector("#movement").textContent = JSON.stringify(data);
         });
+
+        socket.on("frame", function (data) {
+            const arrayBufferView = new Uint8Array(data);
+            const blob = new Blob([arrayBufferView], { type: "image/jpg" });
+            document.querySelector("img#frame").src = urlCreator.createObjectURL(blob);
+        })
     </script>
 </body>
 
