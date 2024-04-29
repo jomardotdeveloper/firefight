@@ -4,10 +4,9 @@ from flask import Flask, render_template
 from flask_socketio import SocketIO
 import cv2
 import numpy as np
-import base64
 from PIL import Image
 import io
-
+import torch
 
 app = Flask(__name__,
             static_url_path="",
@@ -50,7 +49,7 @@ def get_bounding_box(xmin, ymin, xmax, ymax):
     return int(xmin.iloc[0]), int(ymin.iloc[0]), int(width.iloc[0]), int(height.iloc[0])
 
 
-wait_for_seconds = 5
+WAIT_FOR_SECONDS = 3
 
 lower_purple = np.array([120, 50, 100], dtype=np.uint8)
 upper_purple = np.array([150, 255, 255], dtype=np.uint8)
@@ -65,6 +64,10 @@ fire_cascade = cv2.CascadeClassifier("fire_mushiq.xml")
 target = None
 target_current_section = None
 target_first_in_section: datetime = None
+
+fire_model = torch.hub.load("yolov5", "custom", source="local", path="models/fire_best.pt")
+fire_model.conf = 0.2
+fire_model.iou = 0.2
 
 
 def process_frame(frame):
@@ -86,31 +89,6 @@ def process_frame(frame):
              (0, 255, 0), 2)  # Red line for right section boundary
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-    house_mask = cv2.inRange(hsv, lower_maroon, upper_maroon)
-    house_cnts = cv2.findContours(house_mask.copy(), cv2.RETR_EXTERNAL,
-                                  cv2.CHAIN_APPROX_SIMPLE)[-2]
-    house_cnts = sorted(house_cnts, key=cv2.contourArea, reverse=True)
-    valid_house_data = None
-    if house_cnts:
-        largest_cnt = house_cnts[0]
-        x, y, w, h = cv2.boundingRect(largest_cnt)
-        area = cv2.contourArea(largest_cnt)
-        section = get_rect_horizontal_section(width, x, w)
-
-        if area >= min_vest_area:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), HOUSE_COLOR, 2)
-            data = {
-                "area": area,
-                "x": x, "y": y,
-                "w": w, "h": h,
-                "section": section,
-            }
-            socketio.emit("house", data)
-            print("House: {}".format(data))
-            valid_house_data = data
-    else:
-        socketio.emit("House", "No house in sight")
 
     vest_mask = cv2.inRange(hsv, lower_purple, upper_purple)
     vest_cnts = cv2.findContours(vest_mask.copy(), cv2.RETR_EXTERNAL,
@@ -173,41 +151,30 @@ def process_frame(frame):
             data_use = valid_follow_data
 
         section = data_use["section"]
-        if section == "middle":
-            # ser.write(bytes(b"forward"))
-            socketio.emit("serial", "1")
-        elif section == "left":
-            # ser.write(bytes(b"left"))
-            socketio.emit("serial", "3")
-        elif section == "right":
-            # ser.write(bytes(b"right"))
-            socketio.emit("serial", "4")
-        # if not target:
-        #     target = new_target
-        #     target_first_in_section = datetime.now()
-        #     target_current_section = section
-        # else:
-        #     if target == new_target:
-        #         if target_current_section == section:
-        #             now = datetime.now()
-        #             elapsed = now - target_first_in_section
-        #             if elapsed.seconds >= wait_for_seconds:
-        #                 if section == "middle":
-        #                     # ser.write(bytes(b"forward"))
-        #                     socketio.emit("movement", "forward")
-        #                 elif section == "left":
-        #                     # ser.write(bytes(b"left"))
-        #                     socketio.emit("movement", "left")
-        #                 elif section == "right":
-        #                     # ser.write(bytes(b"right"))
-        #                     socketio.emit("movement", "right")
-        #         else:
-        #             target_current_section = section
-        #             target_first_in_section = datetime.now()
-        #     else:
-        #         target = new_target
-        #         target_current_section = section
-        #         target_first_in_section = datetime.now()
+
+        if not target:
+            target = new_target
+            target_first_in_section = datetime.now()
+            target_current_section = section
+        else:
+            if target == new_target:
+                if target_current_section == section:
+                    now = datetime.now()
+                    elapsed = now - target_first_in_section
+                    if elapsed.seconds >= WAIT_FOR_SECONDS:
+                        if section == "middle":
+                            socketio.emit("serial", "1")
+                        elif section == "left":
+                            socketio.emit("serial", "3")
+                        elif section == "right":
+                            socketio.emit("serial", "4")
+                else:
+                    target_current_section = section
+                    target_first_in_section = datetime.now()
+            else:
+                target = new_target
+                target_current_section = section
+                target_first_in_section = datetime.now()
     else:
         target = None
         target_current_section = None
@@ -235,3 +202,30 @@ def handle_new_frame(raw_frame):
 
 if __name__ == "__main__":
     socketio.run(app, host="0.0.0.0", port=8001, debug=True)
+
+
+# def house_detect(hsv):
+#     house_mask = cv2.inRange(hsv, lower_maroon, upper_maroon)
+#     house_cnts = cv2.findContours(house_mask.copy(), cv2.RETR_EXTERNAL,
+#                                   cv2.CHAIN_APPROX_SIMPLE)[-2]
+#     house_cnts = sorted(house_cnts, key=cv2.contourArea, reverse=True)
+#     valid_house_data = None
+#     if house_cnts:
+#         largest_cnt = house_cnts[0]
+#         x, y, w, h = cv2.boundingRect(largest_cnt)
+#         area = cv2.contourArea(largest_cnt)
+#         section = get_rect_horizontal_section(width, x, w)
+
+#         if area >= min_vest_area:
+#             cv2.rectangle(frame, (x, y), (x + w, y + h), HOUSE_COLOR, 2)
+#             data = {
+#                 "area": area,
+#                 "x": x, "y": y,
+#                 "w": w, "h": h,
+#                 "section": section,
+#             }
+#             socketio.emit("house", data)
+#             print("House: {}".format(data))
+#             valid_house_data = data
+#     else:
+#         socketio.emit("House", "No house in sight")
