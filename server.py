@@ -1,4 +1,5 @@
 from datetime import datetime
+import time
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO
@@ -16,9 +17,15 @@ app.config["SECRET_KEY"] = "firefighter"
 socketio = SocketIO(app)
 
 
-FIRE_COLOR = (0, 0, 255)
-VEST_COLOR = (137, 87, 163)
-HOUSE_COLOR = (56, 57, 83)
+FIRE_BOX_COLOR = (0, 0, 255)
+VEST_BOX_COLOR = (137, 87, 163)
+HOUSE_BOX_COLOR = (56, 57, 83)
+WAIT_FOR_SECONDS = 3
+DETECT_AREA = 1000
+STOP_AT_AREA = 10000
+EXTINGUISH_AT_AREA = 8000
+
+assert EXTINGUISH_AT_AREA < STOP_AT_AREA, "Extinguish area should be less than Stop Area"
 
 
 def get_rect_horizontal_section(frame_width, x, w):
@@ -49,12 +56,8 @@ def get_bounding_box(xmin, ymin, xmax, ymax):
     return int(xmin.iloc[0]), int(ymin.iloc[0]), int(width.iloc[0]), int(height.iloc[0])
 
 
-WAIT_FOR_SECONDS = 3
-
 lower_purple = np.array([120, 50, 100], dtype=np.uint8)
 upper_purple = np.array([150, 255, 255], dtype=np.uint8)
-min_vest_area = 1000
-max_area = 10000
 
 lower_maroon = np.array([170, 151, 140], dtype=np.uint8)
 upper_maroon = np.array([83, 57, 56], dtype=np.uint8)
@@ -68,6 +71,32 @@ target_first_in_section: datetime = None
 fire_model = torch.hub.load("yolov5", "custom", source="local", path="models/fire_best.pt")
 fire_model.conf = 0.2
 fire_model.iou = 0.2
+
+
+def action_forward():
+    print("Forward")
+    socketio.emit("serial", "5")
+    socketio.emit("serial", "1")
+
+
+def action_left():
+    print("Left")
+    socketio.emit("serial", "3")
+    socketio.emit("serial", "1")
+
+
+def action_right():
+    print("Right")
+    socketio.emit("serial", "6")
+    socketio.emit("serial", "1")
+
+
+def action_extinguish():
+    print("Down")
+    socketio.emit("serial", "0")
+    socketio.emit("serial", "7")
+    socketio.emit("serial", "6")
+    socketio.emit("serial", "0")
 
 
 def process_frame(frame):
@@ -102,8 +131,8 @@ def process_frame(frame):
         area = cv2.contourArea(largest_cnt)
         section = get_rect_horizontal_section(width, x, w)
 
-        if area >= min_vest_area and area <= max_area:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), VEST_COLOR, 2)
+        if area >= DETECT_AREA and area <= STOP_AT_AREA:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), VEST_BOX_COLOR, 2)
             data = {
                 "area": area,
                 "x": x, "y": y,
@@ -111,36 +140,29 @@ def process_frame(frame):
                 "section": section,
             }
             socketio.emit("vest", data)
-            print("Vest: {}".format(data))
             valid_follow_data = data
     else:
         socketio.emit("vest", "No vest in sight")
 
-    fires = fire_cascade.detectMultiScale(frame, 1.2, 5)
-    if fires is not None:
-        fires = sorted(fires, key=lambda x: x[2] * x[3], reverse=True)
-
+    fires = fire_model(frame, size=640)
     valid_fire_data = None
-    if fires:
-        x, y, w, h = fires[0]
-        x = int(x)
-        y = int(y)
-        w = int(w)
-        h = int(h)
-        cv2.rectangle(frame, (x, y), (x + w, y + h), FIRE_COLOR, 2)
-        area = w * h
-        section = get_rect_horizontal_section(width, x, w)
-        data = {
-            "area": area,
-            "x": x, "y": y,
-            "w": w, "h": h,
-            "section": section,
-        }
-        socketio.emit("fire", data)
-        print("Fire: {}".format(data))
-        valid_fire_data = data
-    else:
-        socketio.emit("fire", "No fire in sight")
+    for xyxy in fires.pandas().xyxy:
+        fire_df = xyxy[xyxy["name"] == "fire"]
+        if fire_df.empty:
+            continue
+
+        if area >= DETECT_AREA:
+            x, y, w, h = get_bounding_box(fire_df["xmin"], fire_df["ymin"], fire_df["xmax"], fire_df["ymax"])
+            cv2.rectangle(frame, (x, y), (x+w, y+h), FIRE_BOX_COLOR, 2)
+            section = get_rect_horizontal_section(width, x, w)
+            area = w * h
+            data = {
+                "area": area,
+                "x": x, "y": y,
+                "w": w, "h": h,
+                "section": section,
+            }
+            valid_fire_data = data
 
     if valid_fire_data or valid_follow_data:
         if valid_fire_data:
@@ -151,6 +173,11 @@ def process_frame(frame):
             data_use = valid_follow_data
 
         section = data_use["section"]
+        area = data_use["area"]
+
+        print("Current Target: ", new_target)
+        print("Section: ", section)
+        print("Area: ", area)
 
         if not target:
             target = new_target
@@ -163,11 +190,14 @@ def process_frame(frame):
                     elapsed = now - target_first_in_section
                     if elapsed.seconds >= WAIT_FOR_SECONDS:
                         if section == "middle":
-                            socketio.emit("serial", "1")
+                            if new_target == "fire" and area >= EXTINGUISH_AT_AREA:
+                                action_extinguish()
+                            else:
+                                action_forward()
                         elif section == "left":
-                            socketio.emit("serial", "3")
+                            action_left()
                         elif section == "right":
-                            socketio.emit("serial", "4")
+                            action_right()
                 else:
                     target_current_section = section
                     target_first_in_section = datetime.now()
@@ -229,3 +259,29 @@ if __name__ == "__main__":
 #             valid_house_data = data
 #     else:
 #         socketio.emit("House", "No house in sight")
+
+    # fires = fire_cascade.detectMultiScale(frame, 1.2, 5)
+    # if fires is not None:
+    #     fires = sorted(fires, key=lambda x: x[2] * x[3], reverse=True)
+
+    # valid_fire_data = None
+    # if fires:
+    #     x, y, w, h = fires[0]
+    #     x = int(x)
+    #     y = int(y)
+    #     w = int(w)
+    #     h = int(h)
+    #     cv2.rectangle(frame, (x, y), (x + w, y + h), FIRE_COLOR, 2)
+    #     area = w * h
+    #     section = get_rect_horizontal_section(width, x, w)
+    #     data = {
+    #         "area": area,
+    #         "x": x, "y": y,
+    #         "w": w, "h": h,
+    #         "section": section,
+    #     }
+    #     socketio.emit("fire", data)
+    #     print("Fire: {}".format(data))
+    #     valid_fire_data = data
+    # else:
+    #     socketio.emit("fire", "No fire in sight")
