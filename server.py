@@ -20,7 +20,7 @@ socketio = SocketIO(app)
 FIRE_BOX_COLOR = (0, 0, 255)
 VEST_BOX_COLOR = (137, 87, 163)
 HOUSE_BOX_COLOR = (56, 57, 83)
-WAIT_FOR_SECONDS = 1
+WAIT_FOR_SECONDS = 0
 DETECT_AREA = 500
 STOP_AT_AREA = 4_000
 EXTINGUISH_AT_AREA = 3_000
@@ -68,7 +68,7 @@ target_first_in_section: datetime = None
 running = False
 
 fire_model = torch.hub.load("yolov5", "custom", source="local", path="models/fire_best.pt")
-fire_model.conf = 0.5
+fire_model.conf = 0.1
 fire_model.iou = 0.2
 
 
